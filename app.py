@@ -4,6 +4,12 @@ import unicodedata
 
 import streamlit as st
 
+for _key in ("OPENAI_API_KEY", "PINECONE_API_KEY", "EMBEDDING_MODEL", "CHAT_MODEL", "PINECONE_INDEX"):
+    try:
+        os.environ[_key] = str(st.secrets[_key])
+    except Exception:
+        pass
+
 from src.config import GAMES_META_PATH, OPENAI_API_KEY, PINECONE_API_KEY
 from src.respond import answer
 from src.retrieve import recommend_similar_games

@@ -6,22 +6,8 @@ from dotenv import load_dotenv
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
 
-
-def _secret(name: str, default: str | None = None) -> str | None:
-    value = os.getenv(name)
-    if value:
-        return value
-    try:
-        import streamlit as st
-        if name in st.secrets:
-            return str(st.secrets[name])
-    except Exception:
-        pass
-    return default
-
-
-OPENAI_API_KEY = _secret("OPENAI_API_KEY")
-PINECONE_API_KEY = _secret("PINECONE_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
 CHAT_MODEL = os.getenv("CHAT_MODEL", "gpt-4o-mini")
 EMBEDDING_DIM = 1536
