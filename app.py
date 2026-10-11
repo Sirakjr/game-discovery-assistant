@@ -71,8 +71,9 @@ st.caption(
     "Games that are not in the index yet are fetched on first ask."
 )
 
-if not OPENAI_API_KEY or not PINECONE_API_KEY:
-    st.error("Set OPENAI_API_KEY and PINECONE_API_KEY in .env (local) or Streamlit secrets (cloud).")
+missing = [name for name, val in (("OPENAI_API_KEY", OPENAI_API_KEY), ("PINECONE_API_KEY", PINECONE_API_KEY)) if not val]
+if missing:
+    st.error("Missing " + ", ".join(missing) + ". Set them in .env (local) or App settings → Secrets (Streamlit Cloud).")
     st.stop()
 
 meta = {}
