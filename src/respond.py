@@ -1,19 +1,25 @@
 """Review-grounded answers via the OpenAI Responses API."""
 import json
 from collections.abc import Iterator
+
 from openai import OpenAI
-from src.config import OPENAI_API_KEY, CHAT_MODEL
-from src.retrieve import search_reviews
-from src.tools import GAME_REVIEW_STATS_TOOL, get_game_review_stats
+
+from src.config import CHAT_MODEL, OPENAI_API_KEY
+from src.retrieve import prepare_query_games, search_reviews
+from src.tools import ALL_TOOLS, run_tool
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 SYSTEM_PROMPT = (
-    "You answer questions about video games using ONLY the player reviews provided as context. "
-    "Be balanced: reflect both positive and negative sentiment when it exists, and quote or "
-    "paraphrase specific reviews. Name the games you're drawing from. If the user asks about a "
-    "game's overall reception, call get_game_review_stats for hard numbers. If the reviews don't "
-    "cover the question, say so rather than inventing."
+    "You answer questions about video games using ONLY the player reviews provided as context "
+    "and tool results. Be balanced: reflect both positive and negative sentiment when it exists, "
+    "and quote or paraphrase specific reviews. Name the games you're drawing from. "
+    "If the user names a game that is missing from the reviews, call ensure_game_indexed. "
+    "If they ask about overall reception, call get_game_review_stats. "
+    "If they ask for similar games or what to play next, call recommend_similar_games "
+    "(those recs come from review embeddings, not store tags). "
+    "If the reviews don't cover the question, say so rather than inventing. "
+    "Put similar-game suggestions in recommendations when you have them."
 )
 
 ANSWER_SCHEMA = {
@@ -36,9 +42,27 @@ ANSWER_SCHEMA = {
                 },
             },
             "games_mentioned": {"type": "array", "items": {"type": "string"}},
+            "recommendations": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string"},
+                        "why": {"type": "string"},
+                    },
+                    "required": ["title", "why"],
+                    "additionalProperties": False,
+                },
+            },
             "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
         },
-        "required": ["answer", "supporting_reviews", "games_mentioned", "confidence"],
+        "required": [
+            "answer",
+            "supporting_reviews",
+            "games_mentioned",
+            "recommendations",
+            "confidence",
+        ],
         "additionalProperties": False,
     },
 }
@@ -54,6 +78,8 @@ TEXT_FORMAT = {
 
 
 def build_context(hits: list[dict]) -> str:
+    if not hits:
+        return "(No matching reviews were retrieved. Call ensure_game_indexed if the user named a specific game.)"
     lines = []
     for h in hits:
         tag = "👍" if h.get("voted_up") else "👎"
@@ -61,19 +87,34 @@ def build_context(hits: list[dict]) -> str:
     return "\n\n".join(lines)
 
 
+def _tool_args(item, fallback_game: str | None) -> dict:
+    raw = item.arguments
+    args = raw if isinstance(raw, dict) else json.loads(raw or "{}")
+    if fallback_game and not args.get("title") and not args.get("name"):
+        args["title"] = fallback_game
+        args["name"] = fallback_game
+    return args
+
+
 def answer(query: str, game: str | None = None) -> Iterator[str]:
-    hits = search_reviews(query, game=game)
+    prepared = prepare_query_games(query, game=game)
+    filter_title = prepared.get("filter_title") or game
+    hits = search_reviews(query, game=filter_title)
     context = build_context(hits)
+    note = ""
+    if prepared.get("titles"):
+        note = "Indexed games for this question: " + ", ".join(prepared["titles"]) + "\n\n"
+
     stream = client.responses.create(
         model=CHAT_MODEL,
         input=[
             {"role": "system", "content": SYSTEM_PROMPT},
             {
                 "role": "user",
-                "content": f"Player reviews:\n{context}\n\nQuestion: {query}",
+                "content": f"{note}Player reviews:\n{context}\n\nQuestion: {query}",
             },
         ],
-        tools=[GAME_REVIEW_STATS_TOOL],
+        tools=ALL_TOOLS,
         stream=True,
         text=TEXT_FORMAT,
     )
@@ -88,43 +129,59 @@ def answer(query: str, game: str | None = None) -> Iterator[str]:
         elif kind == "response.completed":
             final = event.response
 
-    if final is None:
-        return
-
-    for item in final.output:
-        if item.type == "function_call" and item.name == "get_game_review_stats":
-            raw = item.arguments
-            args = raw if isinstance(raw, dict) else json.loads(raw or "{}")
-            title = args.get("title") or args.get("game") or args.get("name") or game
-            if not title:
-                continue
-            stats = get_game_review_stats(title)
-            followup = client.responses.create(
-                model=CHAT_MODEL,
-                previous_response_id=final.id,
-                tools=[GAME_REVIEW_STATS_TOOL],
-                text=TEXT_FORMAT,
-                input=[{
-                    "type": "function_call_output",
-                    "call_id": item.call_id,
-                    "output": json.dumps(stats),
-                }],
-                stream=True,
-            )
-            followup_yielded = False
-            followup_final = None
-            for event in followup:
-                kind = getattr(event, "type", None)
-                if kind == "response.output_text.delta" and getattr(event, "delta", None):
-                    followup_yielded = True
-                    yield event.delta
-                elif kind == "response.completed":
-                    followup_final = event.response
-            if not followup_yielded and followup_final and followup_final.output_text:
-                yield followup_final.output_text
+    rounds = 0
+    while final is not None and rounds < 4:
+        calls = [item for item in (final.output or []) if getattr(item, "type", None) == "function_call"]
+        if not calls:
+            break
+        rounds += 1
+        tool_outputs = []
+        for item in calls:
+            args = _tool_args(item, filter_title)
+            result = run_tool(item.name, args)
+            tool_outputs.append({
+                "type": "function_call_output",
+                "call_id": item.call_id,
+                "output": json.dumps(result),
+            })
+            if item.name == "ensure_game_indexed" and result.get("ok") and result.get("title"):
+                extra = search_reviews(query, game=result["title"])
+                if extra:
+                    tool_outputs[-1]["output"] = json.dumps({
+                        **result,
+                        "fresh_reviews": [
+                            {"title": h["title"], "text": (h.get("text") or "")[:500], "voted_up": h.get("voted_up")}
+                            for h in extra[:6]
+                        ],
+                    })
+        followup = client.responses.create(
+            model=CHAT_MODEL,
+            previous_response_id=final.id,
+            tools=ALL_TOOLS,
+            text=TEXT_FORMAT,
+            input=tool_outputs,
+            stream=True,
+        )
+        followup_final = None
+        followup_yielded = False
+        for event in followup:
+            kind = getattr(event, "type", None)
+            if kind == "response.output_text.delta" and getattr(event, "delta", None):
+                followup_yielded = True
+                yielded = True
+                yield event.delta
+            elif kind == "response.completed":
+                followup_final = event.response
+        final = followup_final
+        if followup_yielded:
+            return
+        if final and final.output_text and not any(
+            getattr(item, "type", None) == "function_call" for item in (final.output or [])
+        ):
+            yield final.output_text
             return
 
-    if not yielded and final.output_text:
+    if not yielded and final and final.output_text:
         yield final.output_text
 
 

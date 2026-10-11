@@ -123,5 +123,33 @@ def main():
     print(f"\nDone. {len(meta_out)} games, {review_count} reviews -> {REVIEWS_PATH}")
 
 
+def ingest_app(appid: int, want: int | None = None) -> tuple[dict, list[dict]]:
+    """Fetch one game and append it to the local JSON files. Returns (meta, reviews)."""
+    from src.config import ON_DEMAND_REVIEWS
+
+    want = ON_DEMAND_REVIEWS if want is None else want
+    meta = fetch_metadata(appid)
+    if not meta or not meta.get("title"):
+        return {}, []
+    reviews = []
+    with open(REVIEWS_PATH, "a", encoding="utf-8") as rf:
+        for rev in fetch_reviews(appid, want=want):
+            if not rev["review_text"]:
+                continue
+            rev["app_id"] = appid
+            rev["title"] = meta["title"]
+            rf.write(json.dumps(rev, ensure_ascii=False) + "\n")
+            reviews.append(rev)
+    try:
+        with open(GAMES_META_PATH, encoding="utf-8") as mf:
+            meta_out = json.load(mf)
+    except (FileNotFoundError, json.JSONDecodeError):
+        meta_out = {}
+    meta_out[str(appid)] = meta
+    with open(GAMES_META_PATH, "w", encoding="utf-8") as mf:
+        json.dump(meta_out, mf, ensure_ascii=False, indent=2)
+    return meta, reviews
+
+
 if __name__ == "__main__":
     main()
