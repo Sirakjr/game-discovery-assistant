@@ -36,7 +36,7 @@ def lookup_meta(meta: dict, name: str | None) -> dict | None:
     return None
 
 
-def pick_covers(meta: dict, mentioned: list | None, focused: str | None, recs: list | None, k: int = 4) -> list[dict]:
+def pick_covers(meta: dict, mentioned: list | None, recs: list | None, k: int = 4) -> list[dict]:
     picked, seen = [], set()
 
     def add(name: str | None = None, app_id: int | None = None, title: str | None = None) -> None:
@@ -56,7 +56,6 @@ def pick_covers(meta: dict, mentioned: list | None, focused: str | None, recs: l
         add(title=rec.get("title"), app_id=rec.get("app_id"))
         if len(picked) >= k:
             return picked
-    add(name=focused)
     return picked
 
 
@@ -83,12 +82,8 @@ if missing:
     st.stop()
 
 meta = {}
-game = None
 if os.path.exists(GAMES_META_PATH):
     meta = json.load(open(GAMES_META_PATH, encoding="utf-8"))
-    titles = sorted(g["title"] for g in meta.values())
-    choice = st.selectbox("Focus on one indexed game? (optional)", ["All games"] + titles)
-    game = None if choice == "All games" else choice
 
 query = st.text_input(
     "Your question",
@@ -100,7 +95,7 @@ if query:
     box = st.empty()
     with st.spinner("Resolving game, retrieving reviews, writing answer…"):
         with box:
-            collected = st.write_stream(answer(query, game=game))
+            collected = st.write_stream(answer(query))
     if isinstance(collected, list):
         collected = "".join(c for c in collected if isinstance(c, str))
     text = collected if isinstance(collected, str) else ""
@@ -116,7 +111,7 @@ if query:
                 tag = "👍" if r.get("sentiment") in (True, "positive") else "👎"
                 st.markdown(f"**{r.get('title')}** {tag} — {r.get('snippet')}")
 
-    rec_title = game or (mentioned[0] if mentioned else None)
+    rec_title = mentioned[0] if mentioned else None
     recs = []
     if rec_title:
         rec_result = recommend_similar_games(rec_title, k=3)
@@ -136,7 +131,7 @@ if query:
 
     if os.path.exists(GAMES_META_PATH):
         meta = json.load(open(GAMES_META_PATH, encoding="utf-8"))
-    covers = pick_covers(meta, mentioned, focused=game, recs=recs)
+    covers = pick_covers(meta, mentioned, recs=recs)
     if covers:
         st.subheader("Cover art")
         show_game_row(covers)

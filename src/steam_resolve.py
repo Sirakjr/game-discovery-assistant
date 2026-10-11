@@ -23,6 +23,21 @@ GET_APPLIST_URLS = (
 )
 STORE_SEARCH_URL = "https://store.steampowered.com/api/storesearch/"
 APP_URL_RE = re.compile(r"(?:store\.steampowered\.com/app/|aka\.ms/|/app/)(\d{1,10})", re.I)
+# Steam store search of a full sentence is empty; nicknames also miss official titles.
+_QUERY_STOP = re.compile(
+    r"\b(is|are|was|were|the|a|an|to|for|of|and|or|but|if|what|whats|about|how|"
+    r"does|do|did|can|could|should|still|worth|playing|play|it|its|in|on|with|"
+    r"this|that|game|games|review|reviews|reviewers|too|very|really|i|you|my|"
+    r"your|year|years|like|think|thoughts|anyone|people|players|casual)\b",
+    re.I,
+)
+# Store search for "gta 5" returns the Enhanced SKU; the original listing has the review corpus.
+NICKNAMES = {
+    "gta 5": (271590, "Grand Theft Auto V"),
+    "gta v": (271590, "Grand Theft Auto V"),
+    "gta5": (271590, "Grand Theft Auto V"),
+    "gtav": (271590, "Grand Theft Auto V"),
+}
 
 _apps_cache: list[tuple[str, str, int]] | None = None
 
@@ -172,22 +187,68 @@ def _pick_from_rows(query_fold: str, rows: list[tuple[str, str, int]], limit: in
     return picked
 
 
+def _phrase_in_query(query_fold: str, phrase: str) -> bool:
+    idx = query_fold.find(phrase)
+    if idx < 0:
+        return False
+    before = idx == 0 or not query_fold[idx - 1].isalnum()
+    after_i = idx + len(phrase)
+    after = after_i >= len(query_fold) or not query_fold[after_i].isalnum()
+    return before and after
+
+
+def search_term_from_query(query: str) -> str:
+    """Drop question filler so Steam store search gets 'gta 5', not the whole sentence."""
+    q = fold(query)
+    q = _QUERY_STOP.sub(" ", q)
+    q = re.sub(r"[^\w\s]", " ", q)
+    return re.sub(r"\s+", " ", q).strip()
+
+
+def _store_hits(term: str) -> list[tuple[str, int]]:
+    out: list[tuple[str, int]] = []
+    for item in store_search(term):
+        if item["type"] not in ("app", "game", ""):
+            continue
+        title = item.get("title") or ""
+        folded = fold(title)
+        if "soundtrack" in folded or " dlc" in f" {folded}":
+            continue
+        out.append((title, item["app_id"]))
+    return out
+
+
 def titles_in_query(query: str, limit: int = 3) -> list[tuple[str, int]]:
-    """Games named in the question: local catalog, then Steam store search."""
+    """Games named in the question: nicknames, local catalog, then Steam store search."""
     q = fold(query)
     if not q:
         return []
-    picked = _pick_from_rows(q, local_catalog() + _apps(), limit)
-    if picked:
-        return picked
-    extra = []
-    for item in store_search(query):
-        if item["type"] not in ("app", "game", ""):
-            continue
-        extra.append((fold(item["title"]), item["title"], item["app_id"]))
-    return _pick_from_rows(q, extra, limit) or (
-        [(item["title"], item["app_id"]) for item in store_search(query)[:1] if item.get("app_id")]
-    )
+    picked: list[tuple[str, int]] = []
+    seen: set[int] = set()
+
+    def _add(title: str, appid: int) -> None:
+        if appid in seen or len(picked) >= limit:
+            return
+        folded = fold(title)
+        if any(folded in fold(t) or fold(t) in folded for t, _aid in picked):
+            return
+        picked.append((title, appid))
+        seen.add(appid)
+
+    for nick, (appid, title) in sorted(NICKNAMES.items(), key=lambda item: -len(item[0])):
+        if _phrase_in_query(q, nick):
+            _add(title, appid)
+    for title, appid in _pick_from_rows(q, local_catalog() + _apps(), limit):
+        _add(title, appid)
+    term = search_term_from_query(query)
+    for candidate in (term, query.strip()):
+        if not candidate or len(picked) >= limit:
+            break
+        for title, appid in _store_hits(candidate):
+            _add(title, appid)
+            if len(picked) >= limit:
+                break
+    return picked[:limit]
 
 
 def resolve_name(name: str) -> dict | None:
@@ -196,6 +257,10 @@ def resolve_name(name: str) -> dict | None:
     if not name:
         return None
     key = fold(name)
+    nick = NICKNAMES.get(key)
+    if nick:
+        appid, title = nick
+        return {"title": title, "app_id": appid}
     exact = [row for row in local_catalog() if row[0] == key]
     if not exact:
         exact = [row for row in _apps() if row[0] == key]

@@ -4,7 +4,7 @@
     "title": "Hades",
     "genres": "Action, Indie, RPG",
     "description": "Defy the god of the dead as you hack and slash out of the Underworld in this rogue-like dungeon crawler from the creators of Bastion, Transistor, and Pyre.",
-    "release": "17 Sep, 2020"
+    "release": "Sep 17, 2020"
   },
   "413150": {
     "app_id": 413150,
@@ -138,5 +138,12 @@
     "genres": "Action, Adventure",
     "description": "Game of the Year - The Game Awards 2019 Best Action Game of 2019 - IGN Carve your own clever path to vengeance in the award winning adventure from developer FromSoftware, creators of Bloodborne and the Dark Souls series. Take Revenge. Restore Your Honor. Kill Ingeniously.",
     "release": "Mar 21, 2019"
+  },
+  "271590": {
+    "app_id": 271590,
+    "title": "Grand Theft Auto V Legacy",
+    "genres": "Action, Adventure",
+    "description": "Grand Theft Auto V for PC offers players the option to explore the award-winning world of Los Santos and Blaine County in resolutions of up to 4k and beyond, as well as the chance to experience the game running at 60 frames per second.",
+    "release": "Apr 13, 2015"
   }
 }
