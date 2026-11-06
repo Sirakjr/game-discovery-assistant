@@ -3,12 +3,15 @@ import os
 import unicodedata
 
 import streamlit as st
+from openai import AuthenticationError
 
 for _key in ("OPENAI_API_KEY", "PINECONE_API_KEY", "EMBEDDING_MODEL", "CHAT_MODEL", "PINECONE_INDEX"):
     try:
-        os.environ[_key] = str(st.secrets[_key])
+        _val = str(st.secrets[_key]).strip().strip('"').strip("'")
     except Exception:
-        pass
+        continue
+    if _val:
+        os.environ[_key] = _val
 
 from src.config import GAMES_META_PATH, OPENAI_API_KEY, PINECONE_API_KEY
 from src.respond import answer
@@ -94,8 +97,15 @@ if query:
     st.subheader("Answer")
     box = st.empty()
     with st.spinner("Resolving game, retrieving reviews, writing answer…"):
-        with box:
-            collected = st.write_stream(answer(query))
+        try:
+            with box:
+                collected = st.write_stream(answer(query))
+        except AuthenticationError:
+            st.error(
+                "OpenAI rejected OPENAI_API_KEY. In Streamlit Cloud: Manage app → Settings → Secrets. "
+                "Paste a current sk- key, no extra quotes, then reboot the app."
+            )
+            st.stop()
     if isinstance(collected, list):
         collected = "".join(c for c in collected if isinstance(c, str))
     text = collected if isinstance(collected, str) else ""

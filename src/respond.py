@@ -1,5 +1,6 @@
 """Review-grounded answers via the OpenAI Responses API."""
 import json
+import os
 from collections.abc import Iterator
 
 from openai import OpenAI
@@ -8,7 +9,9 @@ from src.config import CHAT_MODEL, OPENAI_API_KEY
 from src.retrieve import prepare_query_games, search_reviews
 from src.tools import ALL_TOOLS, run_tool
 
-client = OpenAI(api_key=OPENAI_API_KEY)
+
+def _client() -> OpenAI:
+    return OpenAI(api_key=os.getenv("OPENAI_API_KEY") or OPENAI_API_KEY)
 
 SYSTEM_PROMPT = (
     "You answer questions about video games using ONLY the player reviews provided as context "
@@ -105,7 +108,7 @@ def answer(query: str, game: str | None = None) -> Iterator[str]:
     if prepared.get("titles"):
         note = "Indexed games for this question: " + ", ".join(prepared["titles"]) + "\n\n"
 
-    stream = client.responses.create(
+    stream = _client().responses.create(
         model=CHAT_MODEL,
         input=[
             {"role": "system", "content": SYSTEM_PROMPT},
@@ -154,7 +157,7 @@ def answer(query: str, game: str | None = None) -> Iterator[str]:
                             for h in extra[:6]
                         ],
                     })
-        followup = client.responses.create(
+        followup = _client().responses.create(
             model=CHAT_MODEL,
             previous_response_id=final.id,
             tools=ALL_TOOLS,

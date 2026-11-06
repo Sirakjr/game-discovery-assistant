@@ -4,7 +4,9 @@ from __future__ import annotations
 import json
 import time
 
-from openai import APIError, OpenAI, RateLimitError
+import os
+
+from openai import APIError, AuthenticationError, OpenAI, RateLimitError
 from pinecone import Pinecone, ServerlessSpec
 
 from src.config import (
@@ -19,8 +21,11 @@ from src.config import (
     REVIEWS_PATH,
 )
 
-openai_client = OpenAI(api_key=OPENAI_API_KEY)
 _index = None
+
+
+def _openai() -> OpenAI:
+    return OpenAI(api_key=os.getenv("OPENAI_API_KEY") or OPENAI_API_KEY)
 
 
 def load_reviews(path: str = REVIEWS_PATH) -> list[dict]:
@@ -41,8 +46,10 @@ def get_embeddings(texts: list[str], retries: int = 5) -> list[list[float]]:
     last_error = None
     for attempt in range(retries):
         try:
-            response = openai_client.embeddings.create(model=EMBEDDING_MODEL, input=texts)
+            response = _openai().embeddings.create(model=EMBEDDING_MODEL, input=texts)
             return [d.embedding for d in response.data]
+        except AuthenticationError:
+            raise
         except (RateLimitError, APIError) as e:
             last_error = e
             time.sleep(2 ** attempt)
